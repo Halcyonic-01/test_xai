@@ -42,6 +42,18 @@ def _build_fix_comment_block(
     return "".join(f"    {line}\n" for line in lines)
 
 
+def _line_from_file(file_path: str, line_num: int) -> str:
+    """Best-effort lookup of vulnerable source line for PR preview."""
+    try:
+        with open(file_path, "r") as f:
+            lines = f.readlines()
+        if 0 < line_num <= len(lines):
+            return lines[line_num - 1].rstrip("\n")
+    except Exception:
+        pass
+    return "<unable to locate vulnerable line>"
+
+
 def _create_pr_via_api(branch_name: str, title: str, body: str) -> str:
     """Create PR via GitHub REST API (fallback when gh CLI is unavailable)."""
     token = os.environ.get("GITHUB_TOKEN")
@@ -179,6 +191,27 @@ def apply_auto_remediation(findings: list[dict]):
         )
         for finding in actionable_findings:
             pr_body += f"- **{finding['rule_id']}** in `{finding['file']}:{finding['line_start']}`\n"
+        pr_body += "\n### Inline Fix Comments Added\n\n"
+        for finding in actionable_findings[:5]:
+            file_path = finding["file"]
+            line_num = finding["line_start"]
+            rule_id = finding["rule_id"]
+            rec = finding.get("recommendation", {})
+            fix_text = rec.get("fix", "Review this line for vulnerabilities.")
+            comment_prefix = _comment_prefix_for_file(file_path)
+            vulnerable_line = _line_from_file(file_path, line_num)
+            preview_block = _build_fix_comment_block(
+                comment_prefix=comment_prefix,
+                rule_id=rule_id,
+                fix_text=fix_text,
+                vulnerable_line=vulnerable_line,
+            )
+            pr_body += (
+                f"#### `{rule_id}` at `{file_path}:{line_num}`\n"
+                "```text\n"
+                f"{preview_block}"
+                "```\n\n"
+            )
             
         # Prefer gh CLI when available; fall back to GitHub REST API.
         gh_available = subprocess.run(
