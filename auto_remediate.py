@@ -2,8 +2,51 @@ import os
 import subprocess
 import logging
 from datetime import datetime
+import json
+import urllib.request
 
 logger = logging.getLogger(__name__)
+
+
+def _comment_prefix_for_file(file_path: str) -> str:
+    """Return a safe single-line comment prefix based on file extension."""
+    ext = os.path.splitext(file_path)[1].lower()
+    if ext in {".js", ".jsx", ".ts", ".tsx", ".java", ".go", ".c", ".cpp", ".cs", ".rs"}:
+        return "//"
+    return "#"
+
+
+def _create_pr_via_api(branch_name: str, title: str, body: str) -> None:
+    """Create PR via GitHub REST API (fallback when gh CLI is unavailable)."""
+    token = os.environ.get("GITHUB_TOKEN")
+    repository = os.environ.get("GITHUB_REPOSITORY")
+    if not token or not repository:
+        raise RuntimeError("Missing GITHUB_TOKEN or GITHUB_REPOSITORY for API PR creation.")
+
+    owner, repo = repository.split("/", 1)
+    api_url = f"https://api.github.com/repos/{owner}/{repo}/pulls"
+    payload = json.dumps({
+        "title": title,
+        "body": body,
+        "head": branch_name,
+        "base": "main",
+    }).encode("utf-8")
+
+    req = urllib.request.Request(
+        api_url,
+        data=payload,
+        method="POST",
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/vnd.github+json",
+            "X-GitHub-Api-Version": "2022-11-28",
+            "Content-Type": "application/json",
+        },
+    )
+    with urllib.request.urlopen(req) as response:
+        if response.status not in (200, 201):
+            raise RuntimeError(f"PR API call failed with status {response.status}")
+
 
 def apply_auto_remediation(findings: list[dict]):
     """
@@ -45,9 +88,10 @@ def apply_auto_remediation(findings: list[dict]):
                 
             # Insert the fix comment right above the vulnerable line
             # Format it nicely as a multi-line comment
-            fix_comment = f"    # [XAI-SecOps Auto-Remediation Suggestion for {rule_id}]\n"
+            comment_prefix = _comment_prefix_for_file(file_path)
+            fix_comment = f"    {comment_prefix} [XAI-SecOps Auto-Remediation Suggestion for {rule_id}]\n"
             for f_line in fix_text.split('\n'):
-                fix_comment += f"    # {f_line}\n"
+                fix_comment += f"    {comment_prefix} {f_line}\n"
                 
             # 0-indexed line_num
             insert_idx = max(0, line_num - 1)
@@ -62,10 +106,15 @@ def apply_auto_remediation(findings: list[dict]):
             return
 
         # 3. Commit the changes
-        subprocess.run(["git", "config", "--global", "user.name", "github-actions[bot]"], check=True)
-        subprocess.run(["git", "config", "--global", "user.email", "github-actions[bot]@users.noreply.github.com"], check=True)
         subprocess.run(["git", "add", "."], check=True)
-        subprocess.run(["git", "commit", "-m", "🔒 Auto-Remediation: Apply XAI-SecOps security fixes"], check=True)
+        subprocess.run([
+            "git",
+            "-c", "user.name=github-actions[bot]",
+            "-c", "user.email=github-actions[bot]@users.noreply.github.com",
+            "commit",
+            "-m",
+            "🔒 Auto-Remediation: Apply XAI-SecOps security fixes",
+        ], check=True)
         
         # 4. Push the branch
         subprocess.run(["git", "push", "origin", branch_name], check=True)
@@ -82,13 +131,22 @@ def apply_auto_remediation(findings: list[dict]):
         for finding in actionable_findings:
             pr_body += f"- **{finding['rule_id']}** in `{finding['file']}:{finding['line_start']}`\n"
             
-        subprocess.run([
-            "gh", "pr", "create",
-            "--title", pr_title,
-            "--body", pr_body,
-            "--head", branch_name,
-            "--base", "main"
-        ], check=True, env={**os.environ, "GH_TOKEN": os.environ.get("GITHUB_TOKEN")})
+        # Prefer gh CLI when available; fall back to GitHub REST API.
+        gh_available = subprocess.run(
+            ["gh", "--version"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        ).returncode == 0
+        if gh_available:
+            subprocess.run([
+                "gh", "pr", "create",
+                "--title", pr_title,
+                "--body", pr_body,
+                "--head", branch_name,
+                "--base", "main"
+            ], check=True, env={**os.environ, "GH_TOKEN": os.environ.get("GITHUB_TOKEN")})
+        else:
+            _create_pr_via_api(branch_name, pr_title, pr_body)
         
         logger.info(f"Successfully created Auto-Remediation PR from branch {branch_name}")
 
