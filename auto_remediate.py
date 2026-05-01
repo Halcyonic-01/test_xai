@@ -22,7 +22,7 @@ def _build_fix_comment_block(
     comment_prefix: str, rule_id: str, fix_text: str, vulnerable_line: str
 ) -> str:
     """Build a remediation block with code-only commented lines."""
-    lines = [f"{comment_prefix} [XAI-SecOps {rule_id}]"]
+    lines = []
 
     extracted_code_lines = []
     for text_line in fix_text.split("\n"):
