@@ -185,7 +185,7 @@ def _format_full_comment(scored_findings: list[dict]) -> str:
 async def run_pr_agent():
     import uuid
     from datetime import datetime, timezone
-    from database import MongoDB
+    MongoDB = None  # optional dependency; set if available
 
     # 1. Read GitHub Actions environment
     github_event_path = os.environ.get("GITHUB_EVENT_PATH")
@@ -211,7 +211,15 @@ async def run_pr_agent():
     # 2. Connect to MongoDB (optional)
     db = None
     if mongodb_uri:
-        print(f"Connecting to MongoDB...")
+        try:
+            from database import MongoDB as _MongoDB  # local import to keep optional
+            MongoDB = _MongoDB
+        except ModuleNotFoundError:
+            print("MONGODB_URI set but 'database' module not found; skipping MongoDB persistence.")
+            MongoDB = None
+
+    if mongodb_uri and MongoDB is not None:
+        print("Connecting to MongoDB...")
         await MongoDB.connect()
         db = MongoDB.get_db()
 
@@ -264,6 +272,32 @@ async def run_pr_agent():
             ai_analysis=sf.get("ai_analysis"),
         )
 
+    # Build remediation payload independent of MongoDB so auto-remediation
+    # can run even when persistence is disabled.
+    remediation_findings = []
+    for sf in scored_findings:
+        risk_score = sf.get("risk_score", 0)
+        line_start = sf.get("line_start", 1)
+        line_end = sf.get("line_end", line_start)
+        rec = get_recommendation(sf["rule_id"], sf.get("cwe"), sf["code_snippet"], sf.get("recommendation"))
+        remediation_findings.append({
+            "rule_id": sf["rule_id"],
+            "file": sf["file"],
+            "line_start": line_start,
+            "line_end": line_end,
+            "code_snippet": sf["code_snippet"],
+            "message": sf["message"],
+            "risk_score": risk_score,
+            "risk_level": get_risk_level(risk_score),
+            "risk_factors": sf.get("risk_factors", {}),
+            "explanation": sf["explanation"],
+            "recommendation": rec,
+            "cwe": sf.get("cwe"),
+            "owasp": sf.get("owasp"),
+            "ai_analysis": sf.get("ai_analysis"),
+            "created_at": datetime.now(timezone.utc),
+        })
+
     # 6. Save to MongoDB
     if db is not None:
         print("Saving results to MongoDB...")
@@ -315,10 +349,12 @@ async def run_pr_agent():
 
     # 6.5 Run Auto-Remediation to create fix PRs
     from auto_remediate import apply_auto_remediation
-    if db is not None and finding_docs:
+    if remediation_findings:
         print("Triggering experimental Auto-Remediation...")
         try:
-            apply_auto_remediation(finding_docs)
+            remediation_result = apply_auto_remediation(remediation_findings)
+            if remediation_result:
+                print(f"Auto-remediation result: {remediation_result}")
         except Exception as e:
             print(f"Auto-remediation failed: {e}")
 

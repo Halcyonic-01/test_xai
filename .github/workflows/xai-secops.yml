@@ -28,6 +28,10 @@ jobs:
     steps:
       - name: 📥 Checkout code
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          # For PRs, check out the contributor branch, not the merge commit.
+          ref: ${{ github.event_name == 'pull_request' && github.head_ref || github.ref_name }}
 
       - name: 🐍 Setup Python
         uses: actions/setup-python@v5
@@ -61,11 +65,16 @@ jobs:
           MONGODB_DB_NAME: xai_secops_test
 
       - name: 🛡️ Run XAI-SecOps scan
+        # Auto-remediation branch/PR creation only works on same-repo PRs.
+        if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
         run: python pr_agent.py
         env:
           MONGODB_URI: ${{ secrets.MONGODB_URI }}
           MONGODB_DB_NAME: system_binary
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_EVENT_PATH: ${{ github.event_path }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_ACTIONS: "true"
 
   lint:
     name: 🧹 Lint & Format
