@@ -5,6 +5,7 @@ from datetime import datetime
 import json
 import urllib.request
 import urllib.error
+import re
 
 logger = logging.getLogger(__name__)
 
@@ -20,25 +21,32 @@ def _comment_prefix_for_file(file_path: str) -> str:
 def _build_fix_comment_block(
     comment_prefix: str, rule_id: str, fix_text: str, vulnerable_line: str
 ) -> str:
-    """Build a visible remediation block with explicit Replace/With guidance."""
-    lines = [
-        f"{comment_prefix} [XAI-SecOps Auto-Remediation Suggestion for {rule_id}]",
-    ]
-    has_replace = False
-    has_with = False
+    """Build a remediation block with code-only commented lines."""
+    lines = [f"{comment_prefix} [XAI-SecOps {rule_id}]"]
+
+    extracted_code_lines = []
     for text_line in fix_text.split("\n"):
         cleaned = text_line.strip()
-        if cleaned:
-            lowered = cleaned.lower()
-            if lowered.startswith("replace:"):
-                has_replace = True
-            if lowered.startswith("with:"):
-                has_with = True
-            lines.append(f"{comment_prefix} {cleaned}")
-    if not has_replace:
-        lines.append(f"{comment_prefix} Replace: {vulnerable_line.strip()}")
-    if not has_with:
-        lines.append(f"{comment_prefix} With:    {fix_text.splitlines()[0].strip() if fix_text.strip() else 'Use safer validated pattern.'}")
+        if not cleaned:
+            continue
+        lowered = cleaned.lower()
+        if lowered.startswith("replace:") or lowered.startswith("use "):
+            continue
+        # Prefer explicit replacement payload when present.
+        if lowered.startswith("with:"):
+            candidate = cleaned.split(":", 1)[1].strip()
+            if candidate:
+                extracted_code_lines.append(candidate)
+            continue
+        # Accept lines that look like code.
+        if re.search(r"[=();{}[\].]|->|=>", cleaned):
+            extracted_code_lines.append(cleaned)
+
+    if not extracted_code_lines:
+        extracted_code_lines.append(vulnerable_line.strip())
+
+    for code_line in extracted_code_lines:
+        lines.append(f"{comment_prefix} {code_line}")
     return "".join(f"    {line}\n" for line in lines)
 
 
