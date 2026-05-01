@@ -74,6 +74,8 @@ app.get("/fetch", (req, res) => {
 // ❌ Prototype Pollution / Mass Assignment
 app.post("/merge", (req, res) => {
     const target = {};
+    // [XAI-SecOps Auto-Remediation Suggestion for javascript.express.security.express-data-exfiltration.express-data-exfiltration]
+    // Review the flagged code and apply the scanner's suggested fix.
     Object.assign(target, req.body); // attacker-controlled keys (e.g., __proto__) get merged
     res.json({ merged: target, polluted: {}.polluted });
 });
