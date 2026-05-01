@@ -1,44 +1,89 @@
-name: XAI-SecOps PR Scan
+name: XAI-SecOps Security Scan
 
 on:
+  push:
+    branches: [main, develop]
   pull_request:
-    types: [opened, synchronize, reopened]
-
-permissions:
-  contents: write
-  pull-requests: write
+    branches: [main]
 
 jobs:
   security-scan:
+    name: 🛡️ Security Scan
     runs-on: ubuntu-latest
-    # Auto-remediation branch/PR creation only works for same-repo PRs.
-    if: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
+    permissions:
+      pull-requests: write
+      contents: write
+
+    services:
+      mongodb:
+        image: mongo:7
+        ports:
+          - 27017:27017
+        options: >-
+          --health-cmd "mongosh --eval 'db.runCommand({ ping: 1 })'"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
 
     steps:
-      - name: Checkout PR head branch
+      - name: 📥 Checkout code
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.head_ref }}
           fetch-depth: 0
+          # For PRs, check out the contributor branch, not the merge commit.
+          ref: ${{ github.event_name == 'pull_request' && github.head_ref || github.ref_name }}
 
-      - name: Setup Python
+      - name: 🐍 Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+          cache: "pip"
 
-      - name: Install dependencies
+      - name: 📦 Install dependencies
         run: |
-          python -m pip install --upgrade pip
+          pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Run smoke tests
-        run: pytest tests/
-
-      - name: Run XAI-SecOps PR agent
+      - name: 🔍 Run Semgrep (standalone)
+        uses: semgrep/semgrep-action@v1
+        with:
+          config: >-
+            p/python
+            p/javascript
+            p/typescript
+            p/golang
+            p/java
         env:
+          SEMGREP_APP_TOKEN: ${{ secrets.SEMGREP_APP_TOKEN }}
+        continue-on-error: true
+
+      - name: 🧪 Run tests
+        run: |
+          pytest tests/ -v --tb=short
+        env:
+          MONGODB_URI: mongodb://localhost:27017
+          MONGODB_DB_NAME: xai_secops_test
+
+      - name: 🛡️ Run XAI-SecOps scan
+        # Auto-remediation branch/PR creation only works on same-repo PRs.
+        if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+        run: python pr_agent.py
+        env:
+          MONGODB_URI: ${{ secrets.MONGODB_URI }}
+          MONGODB_DB_NAME: system_binary
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_EVENT_PATH: ${{ github.event_path }}
           GITHUB_REPOSITORY: ${{ github.repository }}
           GITHUB_ACTIONS: "true"
-          MONGODB_URI: ${{ secrets.MONGODB_URI }}
-        run: python pr_agent.py
+
+  lint:
+    name: 🧹 Lint & Format
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install ruff
+      - run: ruff check .
+        continue-on-error: true
