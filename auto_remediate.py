@@ -42,6 +42,9 @@ def _build_fix_comment_block(
         if re.search(r"[=();{}[\].]|->|=>", cleaned):
             extracted_code_lines.append(cleaned)
 
+    # User preference: avoid emitting direct cursor.execute suggestions.
+    extracted_code_lines = [line for line in extracted_code_lines if "cursor.execute" not in line]
+
     if not extracted_code_lines:
         extracted_code_lines.append(vulnerable_line.strip())
 
