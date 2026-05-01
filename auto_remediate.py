@@ -17,6 +17,31 @@ def _comment_prefix_for_file(file_path: str) -> str:
     return "#"
 
 
+def _build_fix_comment_block(
+    comment_prefix: str, rule_id: str, fix_text: str, vulnerable_line: str
+) -> str:
+    """Build a visible remediation block with explicit Replace/With guidance."""
+    lines = [
+        f"{comment_prefix} [XAI-SecOps Auto-Remediation Suggestion for {rule_id}]",
+    ]
+    has_replace = False
+    has_with = False
+    for text_line in fix_text.split("\n"):
+        cleaned = text_line.strip()
+        if cleaned:
+            lowered = cleaned.lower()
+            if lowered.startswith("replace:"):
+                has_replace = True
+            if lowered.startswith("with:"):
+                has_with = True
+            lines.append(f"{comment_prefix} {cleaned}")
+    if not has_replace:
+        lines.append(f"{comment_prefix} Replace: {vulnerable_line.strip()}")
+    if not has_with:
+        lines.append(f"{comment_prefix} With:    {fix_text.splitlines()[0].strip() if fix_text.strip() else 'Use safer validated pattern.'}")
+    return "".join(f"    {line}\n" for line in lines)
+
+
 def _create_pr_via_api(branch_name: str, title: str, body: str) -> str:
     """Create PR via GitHub REST API (fallback when gh CLI is unavailable)."""
     token = os.environ.get("GITHUB_TOKEN")
@@ -106,9 +131,15 @@ def apply_auto_remediation(findings: list[dict]):
             # Insert the fix comment right above the vulnerable line
             # Format it nicely as a multi-line comment
             comment_prefix = _comment_prefix_for_file(file_path)
-            fix_comment = f"    {comment_prefix} [XAI-SecOps Auto-Remediation Suggestion for {rule_id}]\n"
-            for f_line in fix_text.split('\n'):
-                fix_comment += f"    {comment_prefix} {f_line}\n"
+            vulnerable_line = ""
+            if 0 < line_num <= len(lines):
+                vulnerable_line = lines[line_num - 1].rstrip("\n")
+            fix_comment = _build_fix_comment_block(
+                comment_prefix=comment_prefix,
+                rule_id=rule_id,
+                fix_text=fix_text,
+                vulnerable_line=vulnerable_line or "<unable to locate vulnerable line>",
+            )
                 
             # 0-indexed line_num
             insert_idx = max(0, line_num - 1)
