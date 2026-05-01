@@ -2,6 +2,7 @@ const express = require("express");
 const app = express();
 const fs = require("fs");
 
+// Demo change: trigger PR scan workflow
 // ❌ Hardcoded credentials (SECRET LEAK)
 const DB_PASSWORD = "Xai_21";
 const API_KEY = "12345-SECRET-API-KEY";
@@ -36,6 +37,6 @@ app.get("/", (req, res) => {
     res.send("Vulnerable App Running...");
 });
 
-app.list) => {
+app.listen(3000, () => {
     console.log("Server running on port 3000");
 });
