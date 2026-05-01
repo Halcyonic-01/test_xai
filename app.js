@@ -73,6 +73,7 @@ app.get("/fetch", (req, res) => {
 // ❌ Prototype Pollution / Mass Assignment
 app.post("/merge", (req, res) => {
     const target = {};
+    // Review the flagged code and apply the scanner's suggested fix.
     Object.assign(target, req.body); // attacker-controlled keys (e.g., __proto__) get merged
     res.json({ merged: target, polluted: {}.polluted });
 });
