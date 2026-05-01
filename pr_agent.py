@@ -352,7 +352,9 @@ async def run_pr_agent():
     if remediation_findings:
         print("Triggering experimental Auto-Remediation...")
         try:
-            apply_auto_remediation(remediation_findings)
+            remediation_result = apply_auto_remediation(remediation_findings)
+            if remediation_result:
+                print(f"Auto-remediation result: {remediation_result}")
         except Exception as e:
             print(f"Auto-remediation failed: {e}")
 

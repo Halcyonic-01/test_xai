@@ -4,6 +4,7 @@ import logging
 from datetime import datetime
 import json
 import urllib.request
+import urllib.error
 
 logger = logging.getLogger(__name__)
 
@@ -16,7 +17,7 @@ def _comment_prefix_for_file(file_path: str) -> str:
     return "#"
 
 
-def _create_pr_via_api(branch_name: str, title: str, body: str) -> None:
+def _create_pr_via_api(branch_name: str, title: str, body: str) -> str:
     """Create PR via GitHub REST API (fallback when gh CLI is unavailable)."""
     token = os.environ.get("GITHUB_TOKEN")
     repository = os.environ.get("GITHUB_REPOSITORY")
@@ -43,9 +44,18 @@ def _create_pr_via_api(branch_name: str, title: str, body: str) -> None:
             "Content-Type": "application/json",
         },
     )
-    with urllib.request.urlopen(req) as response:
-        if response.status not in (200, 201):
-            raise RuntimeError(f"PR API call failed with status {response.status}")
+    try:
+        with urllib.request.urlopen(req) as response:
+            if response.status not in (200, 201):
+                raise RuntimeError(f"PR API call failed with status {response.status}")
+            response_data = json.loads(response.read().decode("utf-8"))
+            return response_data.get("html_url", "")
+    except urllib.error.HTTPError as exc:
+        body_text = exc.read().decode("utf-8", errors="replace")
+        # Treat "already exists" as successful from an idempotency perspective.
+        if exc.code == 422 and "A pull request already exists" in body_text:
+            return "already_exists"
+        raise RuntimeError(f"PR API call failed: HTTP {exc.code} - {body_text}") from exc
 
 
 def apply_auto_remediation(findings: list[dict]):
@@ -55,14 +65,21 @@ def apply_auto_remediation(findings: list[dict]):
     creates a new branch, commits the fixes, and raises a PR using the GitHub CLI.
     """
     if not os.getenv("GITHUB_ACTIONS"):
-        logger.info("Not running in GitHub Actions. Skipping auto-remediation PR creation.")
-        return
+        msg = "Not running in GitHub Actions. Skipping auto-remediation PR creation."
+        logger.info(msg)
+        return {"status": "skipped", "reason": msg}
 
     # Filter for critical/high findings
     actionable_findings = [f for f in findings if f.get("risk_score", 0) >= 6.0]
     if not actionable_findings:
-        logger.info("No actionable high/critical findings for auto-remediation.")
-        return
+        msg = "No actionable high/critical findings for auto-remediation."
+        logger.info(msg)
+        return {"status": "skipped", "reason": msg}
+
+    if not os.getenv("GITHUB_TOKEN"):
+        msg = "GITHUB_TOKEN missing; cannot push branch or create remediation PR."
+        logger.error(msg)
+        return {"status": "failed", "reason": msg}
 
     branch_name = f"xaisec-auto-fix-{int(datetime.now().timestamp())}"
     
@@ -102,8 +119,9 @@ def apply_auto_remediation(findings: list[dict]):
             files_modified.add(file_path)
 
         if not files_modified:
-            logger.info("No files were successfully modified.")
-            return
+            msg = "No files were successfully modified."
+            logger.info(msg)
+            return {"status": "skipped", "reason": msg}
 
         # 3. Commit the changes
         subprocess.run(["git", "add", "."], check=True)
@@ -145,10 +163,16 @@ def apply_auto_remediation(findings: list[dict]):
                 "--head", branch_name,
                 "--base", "main"
             ], check=True, env={**os.environ, "GH_TOKEN": os.environ.get("GITHUB_TOKEN")})
+            pr_url = "(created via gh)"
         else:
-            _create_pr_via_api(branch_name, pr_title, pr_body)
+            pr_url = _create_pr_via_api(branch_name, pr_title, pr_body)
         
         logger.info(f"Successfully created Auto-Remediation PR from branch {branch_name}")
+        return {"status": "created", "branch": branch_name, "pr_url": pr_url}
 
     except subprocess.CalledProcessError as e:
         logger.error(f"Auto-Remediation failed during git/gh operations: {e}")
+        return {"status": "failed", "reason": str(e)}
+    except Exception as e:
+        logger.error(f"Auto-Remediation failed: {e}")
+        return {"status": "failed", "reason": str(e)}
