@@ -8,6 +8,7 @@ const https = require("https");
 app.use(express.json({ limit: "10mb" }));
 
 // Demo change: trigger PR scan workflow
+// Demo change: branch validation run for remediation flow
 // ❌ Hardcoded credentials (SECRET LEAK)
 const DB_PASSWORD = "Xai_21";
 const API_KEY = "12345-SECRET-API-KEY";
